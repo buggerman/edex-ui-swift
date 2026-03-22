@@ -16,6 +16,9 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             path: "Sources/EdexUI",
+            resources: [
+                .copy("Resources/AppIcon.icns"),
+            ],
             swiftSettings: []
         ),
     ]

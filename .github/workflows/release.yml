@@ -34,8 +34,9 @@ jobs:
           APP=EdexUI.app
           mkdir -p "$APP/Contents/MacOS"
           mkdir -p "$APP/Contents/Resources"
-          cp .build/release/EdexUI "$APP/Contents/MacOS/EdexUI"
-          cp Sources/EdexUI/Info.plist "$APP/Contents/Info.plist"
+          cp .build/release/EdexUI                        "$APP/Contents/MacOS/EdexUI"
+          cp Sources/EdexUI/Info.plist                    "$APP/Contents/Info.plist"
+          cp Sources/EdexUI/Resources/AppIcon.icns        "$APP/Contents/Resources/AppIcon.icns"
           # Stamp the git tag into the bundle version
           TAG="${GITHUB_REF_NAME#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $TAG" "$APP/Contents/Info.plist"

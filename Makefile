@@ -13,8 +13,9 @@ build:
 ## Assemble a runnable .app bundle from the release binary
 app: build
 	@mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
-	@cp $(BINARY) $(APP)/Contents/MacOS/EdexUI
-	@cp Sources/EdexUI/Info.plist $(APP)/Contents/Info.plist
+	@cp $(BINARY)                             $(APP)/Contents/MacOS/EdexUI
+	@cp Sources/EdexUI/Info.plist             $(APP)/Contents/Info.plist
+	@cp Sources/EdexUI/Resources/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	@echo "→ $(APP) assembled"
 
 ## Ad-hoc sign the bundle (required to run on your own machine without notarization)
