@@ -110,6 +110,42 @@ Sources/EdexUI/
 
 ---
 
+## Download
+
+Pre-built DMGs for Apple Silicon are attached to every [GitHub Release](https://github.com/buggerman/edex-ui-swift/releases).
+
+On first launch, right-click the app and choose **Open** — this is required because the app is ad-hoc signed (not notarized through Apple). You will only need to do this once.
+
+Alternatively, remove the quarantine flag via Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/EdexUI.app
+```
+
+## Building Locally
+
+```bash
+# Quick run (debug)
+make run
+
+# Release .app bundle
+make app
+
+# Distributable DMG
+make dmg VERSION=1.0.0
+```
+
+## Releasing a New Version
+
+Tag the commit and push — the release pipeline handles the rest:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions will build the arm64 binary, assemble the .app bundle, create a signed DMG, compute its SHA-256, and publish a GitHub Release with installation instructions attached.
+
 ## Dependencies
 
 - [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) — terminal emulator (MIT)

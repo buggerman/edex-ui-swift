@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build (arm64)
+    runs-on: macos-14   # Apple Silicon runner — required for arm64-only target
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        run: |
+          XCODE=$(ls /Applications | grep "^Xcode" | sort -V | tail -1)
+          sudo xcode-select -s "/Applications/$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build release binary
+        run: swift build -c release --arch arm64
+
+      - name: Assemble .app bundle
+        run: |
+          APP=EdexUI.app
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+          cp .build/release/EdexUI "$APP/Contents/MacOS/EdexUI"
+          cp Sources/EdexUI/Info.plist "$APP/Contents/Info.plist"
+
+      - name: Ad-hoc code sign
+        run: codesign --force --deep --sign - EdexUI.app
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg-staging
+          cp -R EdexUI.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create \
+            -volname "EdexUI" \
+            -srcfolder dmg-staging \
+            -ov \
+            -format UDZO \
+            EdexUI.dmg
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdexUI-${{ github.sha }}
+          path: EdexUI.dmg
+          retention-days: 14
