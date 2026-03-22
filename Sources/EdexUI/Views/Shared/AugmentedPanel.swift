@@ -97,6 +97,7 @@ struct EdexDivider: View {
 struct EdexBanner: View {
     let title: String
     let name: String
+    var rightLabel: String = ""   // optional right-aligned label (e.g. location abbreviation)
     @Environment(\.edexTheme) var theme
 
     var body: some View {
@@ -106,9 +107,15 @@ struct EdexBanner: View {
                 .opacity(0.4)
             Text(name)
                 .font(.edexMono(size: 11))
+            Spacer(minLength: 0)
+            if !rightLabel.isEmpty {
+                Text(rightLabel)
+                    .font(.edexMono(size: 8))
+                    .opacity(0.45)
+            }
         }
         .foregroundStyle(theme.textColor)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
     }

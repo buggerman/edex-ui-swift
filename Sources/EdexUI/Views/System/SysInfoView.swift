@@ -1,15 +1,55 @@
 import SwiftUI
+import Darwin
 
-// Mirrors src/components/system/sysinfo/
-// Shows Date, Uptime, Kernel version, OS version
+// Matches the compact 4-column layout in the Rust project screenshots:
+//   2026   UPTIME   KERNEL   V
+//   JAN 19 1:02:10  23.5.0  14.5.0
 
 struct SysInfoView: View {
     @Environment(\.edexTheme) var theme
     let uptime: TimeInterval
 
-    private var osVersion: String {
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            col(header: yearString,   value: dateString)
+            col(header: "UPTIME",     value: uptime.uptimeString)
+            col(header: "KERNEL",     value: kernelVersion)
+            col(header: "V",          value: osVersionShort)
+        }
+        .foregroundStyle(theme.textColor)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func col(header: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(header)
+                .font(.edexMono(size: 9))
+                .opacity(0.45)
+            Text(value)
+                .font(.edexMono(size: 9))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Values
+
+    private var yearString: String {
+        "\(Calendar.current.component(.year, from: Date()))"
+    }
+
+    private var dateString: String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f.string(from: Date()).uppercased()
+    }
+
+    private var osVersionShort: String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
     private var kernelVersion: String {
@@ -20,34 +60,12 @@ struct SysInfoView: View {
         }
     }
 
-    private var dateString: String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE dd MMM yyyy"
-        return f.string(from: Date()).uppercased()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            row(label: "DATE",   value: dateString)
-            row(label: "UP",     value: uptime.uptimeString)
-            row(label: "KERNEL", value: kernelVersion)
-            row(label: "OS",     value: osVersion)
-        }
-        .foregroundStyle(theme.textColor)
-        .padding(.horizontal, 6)
-    }
-
-    @ViewBuilder
-    private func row(label: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(label)
-                .font(.edexMono(size: 9))
-                .opacity(0.45)
-                .frame(width: 44, alignment: .leading)
-            Text(value)
-                .font(.edexMono(size: 9))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-        }
+    private var hwModel: String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        guard size > 0 else { return "Unknown" }
+        var buf = [CChar](repeating: 0, count: size)
+        sysctlbyname("hw.model", &buf, &size, nil, 0)
+        return String(cString: buf)
     }
 }

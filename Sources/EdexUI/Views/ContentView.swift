@@ -2,15 +2,19 @@ import SwiftUI
 
 // Root layout — mirrors App.tsx + proportions from index.css / App.tsx:
 //   Top row:  System (16vw) | Terminal (68vw) | Network (16vw)  — 62vh tall
-//   Bottom:   FileSystem                                          — 38vh tall
+//   Bottom:   FileSystem (+ optional keyboard)                   — 38vh tall
 
 struct ContentView: View {
     @EnvironmentObject var themeManager: ThemeManager
+
+    @AppStorage("showKeyboard") private var showKeyboard = false
 
     // Services are owned here and passed down to avoid duplicating @StateObject across panels
     @StateObject private var sysMonitor     = SystemMonitor()
     @StateObject private var netMonitor     = NetworkMonitor()
     @StateObject private var fileWatcher    = FileWatcher()
+
+    private let keyboardHeight: CGFloat = 160
 
     var body: some View {
         let theme = themeManager.current
@@ -40,11 +44,25 @@ struct ContentView: View {
                 Divider()
                     .overlay(theme.borderColor.opacity(0.3))
 
-                // ── Bottom — FileSystem (38%) ────────────────────────────────
-                FileSystemPanel(fileWatcher: fileWatcher)
-                    .frame(height: geo.size.height * 0.38)
-                    .augmentedPanel(theme, clipSize: 10,
-                                    corners: [.topLeft, .topRight], lineWidth: 1)
+                // ── Bottom — FileSystem (38%) + optional keyboard ────────────
+                let bottomHeight = geo.size.height * 0.38
+                let fsHeight = showKeyboard
+                    ? max(0, bottomHeight - keyboardHeight)
+                    : bottomHeight
+
+                VStack(spacing: 0) {
+                    FileSystemPanel(fileWatcher: fileWatcher)
+                        .frame(height: fsHeight)
+                        .augmentedPanel(theme, clipSize: 10,
+                                        corners: [.topLeft, .topRight], lineWidth: 1)
+
+                    if showKeyboard {
+                        KeyboardView()
+                            .frame(height: keyboardHeight)
+                            .environment(\.edexTheme, themeManager.current)
+                    }
+                }
+                .frame(height: bottomHeight)
             }
         }
         .background(themeManager.current.bgMain)

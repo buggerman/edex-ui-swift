@@ -7,6 +7,8 @@ struct NetworkStatusView: View {
     let state: NetworkState
     let ipInfo: IPInfo
     let latency: String
+    let userLat: Double?
+    let userLon: Double?
 
     var stateLabel: String { state == .online ? "ONLINE" : "OFFLINE" }
     var locationLabel: String {
@@ -32,6 +34,11 @@ struct NetworkStatusView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
+
+            WorldMapView(userLat: userLat, userLon: userLon, theme: theme)
+                .frame(maxWidth: .infinity)
+                .frame(height: 90)
+                .padding(.vertical, 4)
 
             HStack(spacing: 0) {
                 infoCell(header: "STATE", value: stateLabel)

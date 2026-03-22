@@ -15,13 +15,18 @@ actor IPInfoService {
             return cached
         }
         do {
-            let url = URL(string: "http://ip-api.com/json?fields=query,city,country,isp")!
+            let url = URL(string: "http://ip-api.com/json?fields=query,city,country,countryCode,region,isp,lat,lon")!
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoded = try JSONDecoder().decode(IPAPIResponse.self, from: data)
             let info = IPInfo(
-                query:    decoded.query,
-                location: "\(decoded.city), \(decoded.country)",
-                isp:      decoded.isp
+                query:       decoded.query,
+                location:    "\(decoded.city), \(decoded.country)",
+                isp:         decoded.isp,
+                lat:         decoded.lat,
+                lon:         decoded.lon,
+                countryCode: decoded.countryCode,
+                region:      decoded.region,
+                city:        decoded.city
             )
             cached = info
             lastFetch = Date()
@@ -32,9 +37,13 @@ actor IPInfoService {
     }
 
     private struct IPAPIResponse: Decodable {
-        var query: String   = ""
-        var city: String    = ""
-        var country: String = ""
-        var isp: String     = ""
+        var query: String       = ""
+        var city: String        = ""
+        var country: String     = ""
+        var countryCode: String = ""
+        var region: String      = ""
+        var isp: String         = ""
+        var lat: Double?        = nil
+        var lon: Double?        = nil
     }
 }

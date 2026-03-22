@@ -1,12 +1,15 @@
 import SwiftUI
 
 // Mirrors src/components/setting/index.tsx
-// Theme picker + hidden files toggle + keyboard shortcuts reference
+// Theme picker + hidden files toggle + keyboard toggle + keyboard shortcuts reference
 
 struct SettingsView: View {
     @Environment(\.edexTheme) var theme
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var themeManager: ThemeManager
+
+    @AppStorage("showKeyboard") private var showKeyboard = false
+    @AppStorage("showWorldMap") private var showWorldMap = false
 
     let showHidden: Bool
     let onToggleHidden: (Bool) -> Void
@@ -54,7 +57,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    // Hidden files toggle
+                    // Filesystem options
                     settingsSection("FILESYSTEM") {
                         Toggle(isOn: $localShowHidden) {
                             Text("Show hidden files")
@@ -63,6 +66,24 @@ struct SettingsView: View {
                         }
                         .toggleStyle(.switch)
                         .onChange(of: localShowHidden) { _, v in onToggleHidden(v) }
+                    }
+
+                    // Interface options
+                    settingsSection("INTERFACE") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle(isOn: $showKeyboard) {
+                                Text("Show virtual keyboard")
+                                    .font(.edexMono(size: 11))
+                                    .foregroundStyle(theme.textColor)
+                            }
+                            .toggleStyle(.switch)
+                            Toggle(isOn: $showWorldMap) {
+                                Text("Show world map in network panel")
+                                    .font(.edexMono(size: 11))
+                                    .foregroundStyle(theme.textColor)
+                            }
+                            .toggleStyle(.switch)
+                        }
                     }
 
                     // Keyboard shortcuts reference
@@ -82,7 +103,7 @@ struct SettingsView: View {
         }
         .background(theme.bgMain)
         .foregroundStyle(theme.textColor)
-        .frame(width: 420, height: 360)
+        .frame(width: 420, height: 380)
         .augmentedPanel(theme, clipSize: 12, corners: [.topLeft, .bottomRight], lineWidth: 1)
     }
 
