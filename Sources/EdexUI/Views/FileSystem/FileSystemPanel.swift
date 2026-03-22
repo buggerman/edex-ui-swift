@@ -17,8 +17,10 @@ struct FileSystemPanel: View {
             EdexBanner(title: "FILESYSTEM", name: fileWatcher.currentPath)
 
             // Adaptive tile grid — mirrors grid-cols-[repeat(auto-fill,minmax(8.5vh,1fr))]
+            // Tile size = 8.5% of screen height, matching the original CSS 8.5vh
             GeometryReader { geo in
-                let tileSize = geo.size.height * 0.75
+                let screenHeight = NSScreen.main?.frame.height ?? geo.size.height / 0.38
+                let tileSize = (screenHeight * 0.085).rounded()
                 let cols = max(1, Int(geo.size.width / (tileSize + 4)))
 
                 ScrollView([.horizontal, .vertical], showsIndicators: false) {
