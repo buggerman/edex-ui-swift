@@ -1,36 +1,45 @@
 import Foundation
 
 // Mirrors src-tauri/src/file/main.rs
-// Tracks the CWD of the active terminal shell (via lsof, same method as macOS Rust code)
-// then watches that directory for changes with FSEvents
+// CWD tracking: polls lsof every 2 s (same technique as the macOS Rust path),
+// and also handles OSC 7 callbacks from SwiftTerm if the shell emits them.
 
 @MainActor
 final class FileWatcher: ObservableObject {
-    @Published var entries: [FileEntry] = []
+    @Published var entries:     [FileEntry] = []
     @Published var currentPath: String = NSHomeDirectory()
 
-    var showHidden = false {
-        didSet { loadDirectory(path: currentPath) }
-    }
+    var showHidden = false { didSet { loadDirectory(path: currentPath) } }
 
-    private var eventStream: FSEventStreamRef?
-    private var watchedPath: String = ""
-    private var shellPID: pid_t = 0
+    // Set by TerminalPanel so FileSystemPanel can send `cd` commands to the active terminal
+    var sendToTerminal: ((String) -> Void)?
 
-    // Called by TerminalPanel when CWD changes via OSC 7 or manual tracking
-    func updateCWD(_ path: String) {
-        guard path != currentPath else { return }
-        currentPath = path
-        loadDirectory(path: path)
-        watchDirectory(path: path)
-    }
+    private var eventStream:  FSEventStreamRef?
+    private var watchedPath:  String = ""
+    private var shellPID:     pid_t = 0
+    private var pollTimer:    Timer?
 
+    // MARK: - Public interface
+
+    /// Called by TerminalSessionView once the shell process is running
     func setPID(_ pid: pid_t) {
         shellPID = pid
+        startCWDPolling()
     }
 
-    // MARK: - Directory Loading
-    // Mirrors file sorting in Rust: directories first, hidden sorted first within category, then alpha
+    /// Called immediately when OSC 7 arrives from the shell (if the shell supports it)
+    func updateCWD(_ path: String) {
+        let clean = path.hasPrefix("file://")
+            ? URL(string: path)?.path ?? path
+            : path
+        guard clean != currentPath else { return }
+        currentPath = clean
+        loadDirectory(path: clean)
+        watchDirectory(path: clean)
+    }
+
+    // MARK: - Directory loading
+    // Sort order mirrors Rust: dirs first, hidden first within category, then alpha
 
     func loadDirectory(path: String) {
         let url = URL(fileURLWithPath: path)
@@ -40,68 +49,99 @@ final class FileWatcher: ObservableObject {
             options: []
         ) else { return }
 
-        var dirEntries: [FileEntry] = []
-        var fileEntries: [FileEntry] = []
+        var dirs: [FileEntry] = []
+        var files: [FileEntry] = []
 
-        for itemURL in items {
-            let name = itemURL.lastPathComponent
+        for item in items {
+            let name     = item.lastPathComponent
             let isHidden = name.hasPrefix(".")
             guard showHidden || !isHidden else { continue }
-
-            let rsrc = try? itemURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            let isDir  = rsrc?.isDirectory  ?? false
+            let rsrc  = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let isDir  = rsrc?.isDirectory   ?? false
             let isLink = rsrc?.isSymbolicLink ?? false
-
             let kind: FileEntryKind = isLink ? .symlink : (isDir ? .directory : .file)
-            let entry = FileEntry(id: itemURL.path, name: name, kind: kind,
-                                  isHidden: isHidden, path: itemURL.path)
-            if isDir { dirEntries.append(entry) } else { fileEntries.append(entry) }
+            let entry = FileEntry(id: item.path, name: name, kind: kind,
+                                  isHidden: isHidden, path: item.path)
+            if isDir { dirs.append(entry) } else { files.append(entry) }
         }
 
-        dirEntries.sort  { ($0.isHidden ? 0 : 1, $0.name) < ($1.isHidden ? 0 : 1, $1.name) }
-        fileEntries.sort { ($0.isHidden ? 0 : 1, $0.name) < ($1.isHidden ? 0 : 1, $1.name) }
+        dirs.sort  { ($0.isHidden ? 0 : 1, $0.name) < ($1.isHidden ? 0 : 1, $1.name) }
+        files.sort { ($0.isHidden ? 0 : 1, $0.name) < ($1.isHidden ? 0 : 1, $1.name) }
 
-        // ".." backward tile + settings gear, then dirs, then files
         var all: [FileEntry] = [
-            FileEntry(id: "__back__",     name: "..", kind: .backward,  isHidden: false, path: url.deletingLastPathComponent().path),
-            FileEntry(id: "__settings__", name: "",   kind: .settings,  isHidden: false, path: ""),
+            FileEntry(id: "__back__",     name: "..", kind: .backward, isHidden: false,
+                      path: url.deletingLastPathComponent().path),
+            FileEntry(id: "__settings__", name: "",   kind: .settings, isHidden: false, path: ""),
         ]
-        all.append(contentsOf: dirEntries)
-        all.append(contentsOf: fileEntries)
+        all.append(contentsOf: dirs)
+        all.append(contentsOf: files)
         entries = all
     }
 
-    // MARK: - FSEvents Watcher
+    // MARK: - lsof CWD polling
+    // Mirrors src-tauri/src/file/main.rs macOS CWD detection
+
+    private func startCWDPolling() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { [weak self] in await self?.pollCWD() }
+        }
+        // First poll immediately
+        Task { await pollCWD() }
+    }
+
+    private func pollCWD() async {
+        guard shellPID > 0 else { return }
+        let pid  = shellPID
+        let path = await Task.detached(priority: .utility) { () -> String? in
+            FileWatcher.cwdFromLSOF(pid: pid)
+        }.value
+        if let path { updateCWD(path) }
+    }
+
+    // nonisolated so it can be called from a detached task without hopping to MainActor
+    private nonisolated static func cwdFromLSOF(pid: pid_t) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments     = ["-a", "-p", "\(pid)", "-d", "cwd", "-Fn"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError  = Pipe()
+        try? proc.run()
+        proc.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        // lsof -Fn output: line starting with "n" contains the path
+        return out.components(separatedBy: "\n")
+                  .first { $0.hasPrefix("n") }
+                  .map   { String($0.dropFirst()) }
+    }
+
+    // MARK: - FSEvents watcher
 
     private func watchDirectory(path: String) {
-        if let stream = eventStream {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
+        if let s = eventStream {
+            FSEventStreamStop(s); FSEventStreamInvalidate(s); FSEventStreamRelease(s)
             eventStream = nil
         }
         guard path != watchedPath else { return }
         watchedPath = path
 
-        var context = FSEventStreamContext(
-            version: 0,
+        var ctx = FSEventStreamContext(version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil
-        )
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            retain: nil, release: nil, copyDescription: nil)
+
+        let cb: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
-            let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
-            Task { @MainActor in watcher.loadDirectory(path: watcher.currentPath) }
+            let w = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
+            Task { @MainActor in w.loadDirectory(path: w.currentPath) }
         }
-        let stream = FSEventStreamCreate(
-            kCFAllocatorDefault, callback, &context,
-            [path] as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.5,
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault, cb, &ctx, [path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
-        )
-        guard let stream else { return }
-        FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        ) else { return }
+
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
         FSEventStreamStart(stream)
         eventStream = stream
     }

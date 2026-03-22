@@ -2,15 +2,15 @@ import SwiftUI
 import AppKit
 
 // Mirrors src/components/terminal/index.tsx + tab.tsx
-// Multiple terminal sessions in a ZStack (all kept alive for correct resize/input handling)
-// Keyboard shortcuts mirror the original: Ctrl+T new, Ctrl+W close, Ctrl+Tab switch
 
 struct TerminalPanel: View {
     @Environment(\.edexTheme) var theme
     @ObservedObject var fileWatcher: FileWatcher
 
-    @State private var tabs: [TerminalTab] = [TerminalTab(id: UUID(), title: "TERMINAL 1")]
-    @State private var activeID: UUID = UUID()
+    @State private var tabs: [TerminalTab]
+    @State private var activeID: UUID
+    // send functions registered by each TerminalSessionView on creation
+    @State private var sendHandlers: [UUID: (String) -> Void] = [:]
 
     init(fileWatcher: FileWatcher) {
         self.fileWatcher = fileWatcher
@@ -21,7 +21,6 @@ struct TerminalPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab bar
             TerminalTabBar(
                 tabs: $tabs,
                 activeID: $activeID,
@@ -32,49 +31,50 @@ struct TerminalPanel: View {
 
             Divider().overlay(theme.borderColor.opacity(0.3))
 
-            // Terminal sessions — all rendered, only active one visible
-            // ZStack keeps NSViews alive so xterm state and scroll position are preserved
             ZStack {
                 ForEach(tabs) { tab in
                     TerminalSessionView(
                         theme: theme,
                         isActive: tab.id == activeID,
                         onCWDChange: { path in
-                            if tab.id == activeID {
-                                fileWatcher.updateCWD(path)
-                            }
+                            if tab.id == activeID { fileWatcher.updateCWD(path) }
                         },
                         onProcessStart: { pid in
-                            fileWatcher.setPID(pid)
+                            if tab.id == activeID { fileWatcher.setPID(pid) }
+                        },
+                        onRegisterSend: { sendFn in
+                            sendHandlers[tab.id] = sendFn
+                            // If this is the first/active tab, wire it up immediately
+                            if tab.id == activeID { fileWatcher.sendToTerminal = sendFn }
                         }
                     )
                     .opacity(tab.id == activeID ? 1 : 0)
-                    // Allow non-active terminals to receive no input without removing the view
                     .allowsHitTesting(tab.id == activeID)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(hex: theme.termBackground))
+            // NSView-level key handler: intercepts Cmd+T/W/[/] and Ctrl+Tab before
+            // the system responder chain can steal them (terminal NSView eats all keys)
+            .background(
+                KeyHandlerView(
+                    onCmdT:         addTab,
+                    onCmdW:         { if tabs.count > 1 { closeTab(activeID) } },
+                    onCtrlTab:      { cycleTab(forward: true) },
+                    onCtrlShiftTab: { cycleTab(forward: false) }
+                )
+            )
         }
         .background(theme.bgMain)
-        // Keyboard shortcuts — mirrors original Ctrl+T/W/Tab bindings
-        .onKeyboardShortcut("t", modifiers: .command) { addTab() }
-        .onKeyboardShortcut("w", modifiers: .command) {
-            if tabs.count > 1 { closeTab(activeID) }
+        .onChange(of: activeID) { _, id in
+            fileWatcher.sendToTerminal = sendHandlers[id]
         }
-        // Ctrl+Tab / Ctrl+Shift+Tab cycle
-        .background(
-            KeyEventHandler(
-                onCtrlTab:      { cycleTab(forward: true) },
-                onCtrlShiftTab: { cycleTab(forward: false) }
-            )
-        )
     }
 
     // MARK: - Tab management
 
     private func addTab() {
-        let n = tabs.count + 1
+        let n   = tabs.count + 1
         let tab = TerminalTab(id: UUID(), title: "TERMINAL \(n)")
         tabs.append(tab)
         activeID = tab.id
@@ -82,11 +82,10 @@ struct TerminalPanel: View {
 
     private func closeTab(_ id: UUID) {
         guard tabs.count > 1, let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
-        // Switch to neighbour before removing
         if activeID == id {
-            let newIdx = idx > 0 ? idx - 1 : 1
-            activeID = tabs[newIdx].id
+            activeID = tabs[idx > 0 ? idx - 1 : 1].id
         }
+        sendHandlers.removeValue(forKey: id)
         tabs.remove(at: idx)
     }
 
@@ -99,54 +98,58 @@ struct TerminalPanel: View {
     }
 }
 
-// MARK: - Keyboard shortcut helpers
+// MARK: - NSView key handler
+// Handles shortcuts that need to be intercepted before the terminal NSView
+// consumes them. performKeyEquivalent fires on all views in the hierarchy,
+// so this works even when LocalProcessTerminalView is first responder.
 
-extension View {
-    func onKeyboardShortcut(_ key: KeyEquivalent,
-                            modifiers: EventModifiers = .command,
-                            perform action: @escaping () -> Void) -> some View {
-        self.keyboardShortcut(key, modifiers: modifiers)
-            .simultaneousGesture(
-                TapGesture().onEnded { _ in action() }
-            )
-    }
-}
-
-// MARK: - Ctrl+Tab NSEvent handler (not expressible via SwiftUI KeyboardShortcut)
-
-private struct KeyEventHandler: NSViewRepresentable {
-    let onCtrlTab: () -> Void
+private struct KeyHandlerView: NSViewRepresentable {
+    let onCmdT:         () -> Void
+    let onCmdW:         () -> Void
+    let onCtrlTab:      () -> Void
     let onCtrlShiftTab: () -> Void
 
-    func makeNSView(context: Context) -> KeyHandlerView {
-        let v = KeyHandlerView()
-        v.onCtrlTab      = onCtrlTab
-        v.onCtrlShiftTab = onCtrlShiftTab
+    func makeNSView(context: Context) -> _KeyHandlerNSView {
+        let v = _KeyHandlerNSView()
+        v.update(self)
         return v
     }
-    func updateNSView(_ nsView: KeyHandlerView, context: Context) {
-        nsView.onCtrlTab      = onCtrlTab
-        nsView.onCtrlShiftTab = onCtrlShiftTab
+    func updateNSView(_ nsView: _KeyHandlerNSView, context: Context) {
+        nsView.update(self)
     }
 }
 
-final class KeyHandlerView: NSView {
-    var onCtrlTab:      (() -> Void)?
-    var onCtrlShiftTab: (() -> Void)?
+final class _KeyHandlerNSView: NSView {
+    private var onCmdT:         (() -> Void)?
+    private var onCmdW:         (() -> Void)?
+    private var onCtrlTab:      (() -> Void)?
+    private var onCtrlShiftTab: (() -> Void)?
 
-    override var acceptsFirstResponder: Bool { true }
+    // fileprivate: parameter type KeyHandlerView is private to this file
+    fileprivate func update(_ rep: KeyHandlerView) {
+        onCmdT         = rep.onCmdT
+        onCmdW         = rep.onCmdW
+        onCtrlTab      = rep.onCtrlTab
+        onCtrlShiftTab = rep.onCtrlShiftTab
+    }
 
-    override func keyDown(with event: NSEvent) {
-        guard event.modifierFlags.contains(.control),
-              event.keyCode == 48 /* Tab */ else {
-            super.keyDown(with: event)
-            return
+    override var acceptsFirstResponder: Bool { false } // don't steal focus
+
+    // performKeyEquivalent is called on every view in the window hierarchy
+    // for Cmd+key shortcuts — this runs before the system acts on them.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let cmd   = event.modifierFlags.contains(.command)
+        let ctrl  = event.modifierFlags.contains(.control)
+        let shift = event.modifierFlags.contains(.shift)
+        let key   = event.charactersIgnoringModifiers ?? ""
+
+        if cmd && key == "t" { DispatchQueue.main.async { self.onCmdT?() }; return true }
+        if cmd && key == "w" { DispatchQueue.main.async { self.onCmdW?() }; return true }
+        if ctrl && event.keyCode == 48 {   // Tab = keyCode 48
+            if shift { DispatchQueue.main.async { self.onCtrlShiftTab?() } }
+            else      { DispatchQueue.main.async { self.onCtrlTab?() } }
+            return true
         }
-        if event.modifierFlags.contains(.shift) {
-            onCtrlShiftTab?()
-        } else {
-            onCtrlTab?()
-        }
+        return false
     }
 }
-
