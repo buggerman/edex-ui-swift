@@ -15,7 +15,7 @@ struct FileTileView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if entry.kind != .settings && entry.kind != .backward {
                     Text(entry.name)
-                        .font(.edexMono(size: 7))
+                        .font(.edexMono(size: 10))
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
                         .truncationMode(.middle)

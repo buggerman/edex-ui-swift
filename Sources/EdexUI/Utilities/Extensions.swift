@@ -56,20 +56,25 @@ extension TimeInterval {
     }
 }
 
-// MARK: - Font helper  (falls back to SF Mono if Fira Mono is not installed)
+// MARK: - Font helper
+// Priority: Fira Mono Nerd Font (bundled) → Fira Mono (system) → SF Mono
 extension Font {
     static func edexMono(size: CGFloat) -> Font {
+        // Bundled Nerd Font — registered at launch in EdexUIApp.init()
+        if NSFont(name: "FiraMonoNerdFont-Regular", size: size) != nil {
+            return .custom("FiraMonoNerdFont-Regular", size: size)
+        }
         if NSFont(name: "FiraMono-Regular", size: size) != nil {
             return .custom("FiraMono-Regular", size: size)
         }
         return .system(size: size, weight: .regular, design: .monospaced)
     }
 
-    static func edexCode(size: CGFloat) -> Font {
-        if NSFont(name: "FiraCode-Regular", size: size) != nil {
-            return .custom("FiraCode-Regular", size: size)
+    static func edexMonoBold(size: CGFloat) -> Font {
+        if NSFont(name: "FiraMonoNerdFont-Bold", size: size) != nil {
+            return .custom("FiraMonoNerdFont-Bold", size: size)
         }
-        return .system(size: size, weight: .regular, design: .monospaced)
+        return .system(size: size, weight: .bold, design: .monospaced)
     }
 }
 

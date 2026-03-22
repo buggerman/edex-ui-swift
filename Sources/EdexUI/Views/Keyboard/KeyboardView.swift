@@ -4,20 +4,15 @@ import Carbon
 
 // MARK: - Layout detector
 
-/// Detects the physical keyboard form factor (ANSI / ISO / JIS) and translates
-/// key codes to their current software-layout labels using UCKeyTranslate.
-/// Re-runs whenever the user changes their input source.
 final class KeyboardLayoutDetector: ObservableObject {
     enum FormFactor { case ansi, iso, jis }
 
     @Published var formFactor: FormFactor = .ansi
-    @Published var keyLabels: [UInt16: String] = [:]
-
-    private var observer: CFRunLoopSource?
+    @Published var normal:  [UInt16: String] = [:]   // unshifted label per keycode
+    @Published var shifted: [UInt16: String] = [:]   // shifted label per keycode
 
     init() {
         refresh()
-        // Re-translate when the user changes input source in System Settings
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(layoutChanged),
@@ -26,83 +21,74 @@ final class KeyboardLayoutDetector: ObservableObject {
         )
     }
 
-    deinit {
-        DistributedNotificationCenter.default().removeObserver(self)
-    }
+    deinit { DistributedNotificationCenter.default().removeObserver(self) }
 
-    @objc private func layoutChanged() {
-        DispatchQueue.main.async { self.refresh() }
-    }
+    @objc private func layoutChanged() { DispatchQueue.main.async { self.refresh() } }
 
     func refresh() {
-        // Physical form factor via LMGetKbdType()
-        // 40 = ANSI, 41 = ISO, 42 = JIS (standard Mac values)
-        let kbdType = LMGetKbdType()
-        switch kbdType {
-        case 41:  formFactor = .iso
-        case 42:  formFactor = .jis
-        default:  formFactor = .ansi
-        }
-
-        keyLabels = translateAll()
+        let t = LMGetKbdType()
+        formFactor = t == 41 ? .iso : t == 42 ? .jis : .ansi
+        let (n, s) = translateAll()
+        normal  = n
+        shifted = s
     }
 
-    // MARK: - UCKeyTranslate
+    // MARK: UCKeyTranslate
 
-    private func translateAll() -> [UInt16: String] {
+    private func translateAll() -> ([UInt16: String], [UInt16: String]) {
         guard
-            let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
-            let dataRef = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
-        else { return [:] }
+            let src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+            let ref = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData)
+        else { return ([:], [:]) }
 
-        let cfData = Unmanaged<CFData>.fromOpaque(dataRef).takeUnretainedValue()
-        guard let bytes = CFDataGetBytePtr(cfData) else { return [:] }
+        let data = Unmanaged<CFData>.fromOpaque(ref).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(data) else { return ([:], [:]) }
         let layout = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { $0 }
+        let kbdType = UInt32(LMGetKbdType())
 
-        // All printable key codes we care about labelling
+        // Printable key codes (excludes modifier-only keys)
         let codes: [UInt16] = [
-            // Number row
             18, 19, 20, 21, 23, 22, 26, 28, 25, 29, // 1-0
             27, 24, 50,                              // - = `
-            // QWERTY row
-            12, 13, 14, 15, 17, 16, 32, 34, 31, 35, 33, 30, 42, // Q-P, [, ], \
-            // ASDF row
-            0, 1, 2, 3, 5, 4, 38, 40, 37, 41, 39,  // A-L, ;, '
-            // ZXCV row
-            6, 7, 8, 9, 11, 45, 46, 43, 47, 44,    // Z-M, ,, ., /
-            10,                                      // ISO-only key (§ / < / `)
+            12, 13, 14, 15, 17, 16, 32, 34, 31, 35, // Q-P
+            33, 30, 42,                              // [ ] backslash
+            0, 1, 2, 3, 5, 4, 38, 40, 37, 41, 39,  // A-L ; '
+            6, 7, 8, 9, 11, 45, 46, 43, 47, 44,    // Z-M , . /
+            10,                                      // ISO § key
         ]
 
-        var labels: [UInt16: String] = [:]
-        let kbdType32 = UInt32(LMGetKbdType())
+        var n: [UInt16: String] = [:]
+        var s: [UInt16: String] = [:]
 
         for code in codes {
-            var dead: UInt32 = 0
-            var chars = [UniChar](repeating: 0, count: 4)
-            var len = 0
-            let err = UCKeyTranslate(
-                layout, code, UInt16(kUCKeyActionDown),
-                0, kbdType32,
-                OptionBits(kUCKeyTranslateNoDeadKeysMask),
-                &dead, 4, &len, &chars
-            )
-            if err == noErr, len > 0, chars[0] != 0 {
-                let s = String(chars.prefix(len).compactMap { Unicode.Scalar($0).map(Character.init) })
-                    .uppercased()
-                    .trimmingCharacters(in: .whitespaces)
-                if !s.isEmpty { labels[code] = s }
-            }
+            if let label = xlate(layout, code, modifier: 0,        kbdType: kbdType) { n[code] = label }
+            if let label = xlate(layout, code, modifier: 2,        kbdType: kbdType) { s[code] = label }
         }
-        return labels
+        return (n, s)
+    }
+
+    private func xlate(_ layout: UnsafePointer<UCKeyboardLayout>,
+                       _ code: UInt16, modifier: UInt32, kbdType: UInt32) -> String? {
+        var dead: UInt32 = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        var len = 0
+        let err = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), modifier, kbdType,
+                                 OptionBits(kUCKeyTranslateNoDeadKeysMask),
+                                 &dead, 4, &len, &chars)
+        guard err == noErr, len > 0, chars[0] != 0 else { return nil }
+        let s = String(chars.prefix(len).compactMap { Unicode.Scalar($0).map(Character.init) })
+                    .uppercased().trimmingCharacters(in: .whitespaces)
+        return s.isEmpty ? nil : s
     }
 }
 
-// MARK: - KeyDef
+// MARK: - Key definition
 
 struct KeyDef {
-    let label: String       // fallback label (modifier keys, fixed labels)
+    let label: String       // modifier keys use fixed text; printable keys use detector
     let code: UInt16
     let widthMultiplier: Double
+    var isSpecial: Bool = false   // modifier keys — never translated
 }
 
 // MARK: - KeyboardView
@@ -110,117 +96,113 @@ struct KeyDef {
 struct KeyboardView: View {
     @Environment(\.edexTheme) var theme
     @StateObject private var detector = KeyboardLayoutDetector()
-    @State private var pressedKeyCodes: Set<UInt16> = []
+    @State private var pressed: Set<UInt16> = []
     @State private var monitor: Any?
 
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 3) {
-                ForEach(rows(for: detector.formFactor).indices, id: \.self) { i in
-                    keyRow(rows(for: detector.formFactor)[i], totalWidth: geo.size.width)
+                ForEach(rows.indices, id: \.self) { i in
+                    rowView(rows[i], totalWidth: geo.size.width)
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
+            .padding(4)
         }
-        .background(theme.bgSecondary.opacity(0.4))
+        .background(theme.bgSecondary.opacity(0.3))
         .onAppear(perform: startMonitoring)
         .onDisappear(perform: stopMonitoring)
     }
 
-    // MARK: - Row layouts
+    // MARK: - Row data (ANSI/ISO selected via detector)
 
-    private func rows(for form: KeyboardLayoutDetector.FormFactor) -> [[KeyDef]] {
-        switch form {
-        case .iso: return isoRows
-        case .jis: return ansiRows   // JIS rendered as ANSI for now
-        case .ansi: return ansiRows
-        }
-    }
-
-    // Helper: translates a keyCode to its current layout label, falling back to the KeyDef's label
-    private func label(_ def: KeyDef) -> String {
-        detector.keyLabels[def.code] ?? def.label
+    private var rows: [[KeyDef]] {
+        detector.formFactor == .iso ? isoRows : ansiRows
     }
 
     private var ansiRows: [[KeyDef]] {[
-        // Row 0: number row
-        [K("ESC",53,1.0), K("`",50,1.0), K("1",18,1.0), K("2",19,1.0), K("3",20,1.0),
-         K("4",21,1.0), K("5",23,1.0), K("6",22,1.0), K("7",26,1.0), K("8",28,1.0),
-         K("9",25,1.0), K("0",29,1.0), K("-",27,1.0), K("=",24,1.0), K("⌫",51,2.0)],
-        // Row 1: QWERTY
-        [K("⇥",48,1.5), K("Q",12,1.0), K("W",13,1.0), K("E",14,1.0), K("R",15,1.0),
-         K("T",17,1.0), K("Y",16,1.0), K("U",32,1.0), K("I",34,1.0), K("O",31,1.0),
-         K("P",35,1.0), K("[",33,1.0), K("]",30,1.0), K("\\",42,1.0)],
-        // Row 2: ASDF
-        [K("⇪",57,1.75), K("A",0,1.0), K("S",1,1.0), K("D",2,1.0), K("F",3,1.0),
-         K("G",5,1.0), K("H",4,1.0), K("J",38,1.0), K("K",40,1.0), K("L",37,1.0),
-         K(";",41,1.0), K("'",39,1.0), K("↩",36,2.25)],
-        // Row 3: ZXCV
-        [K("⇧",56,2.25), K("Z",6,1.0), K("X",7,1.0), K("C",8,1.0), K("V",9,1.0),
-         K("B",11,1.0), K("N",45,1.0), K("M",46,1.0), K(",",43,1.0), K(".",47,1.0),
-         K("/",44,1.0), K("⇧",60,2.25)],
-        // Row 4: bottom
-        [K("⌃",59,1.5), K("FN",63,1.5), K(" ",49,5.0), K("⌥",58,1.5), K("⌃",62,1.5)],
+        [S("ESC",53,1.0), P("`",50,1.0), P("1",18,1.0), P("2",19,1.0), P("3",20,1.0),
+         P("4",21,1.0), P("5",23,1.0), P("6",22,1.0), P("7",26,1.0), P("8",28,1.0),
+         P("9",25,1.0), P("0",29,1.0), P("-",27,1.0), P("=",24,1.0), S("BACK",51,2.0)],
+
+        [S("TAB",48,1.5), P("Q",12,1.0), P("W",13,1.0), P("E",14,1.0), P("R",15,1.0),
+         P("T",17,1.0), P("Y",16,1.0), P("U",32,1.0), P("I",34,1.0), P("O",31,1.0),
+         P("P",35,1.0), P("[",33,1.0), P("]",30,1.0), P("\\",42,1.0)],
+
+        [S("CAPS",57,1.75), P("A",0,1.0), P("S",1,1.0), P("D",2,1.0), P("F",3,1.0),
+         P("G",5,1.0), P("H",4,1.0), P("J",38,1.0), P("K",40,1.0), P("L",37,1.0),
+         P(";",41,1.0), P("'",39,1.0), S("ENTER",36,2.25)],
+
+        [S("SHIFT",56,2.25), P("Z",6,1.0), P("X",7,1.0), P("C",8,1.0), P("V",9,1.0),
+         P("B",11,1.0), P("N",45,1.0), P("M",46,1.0), P(",",43,1.0), P(".",47,1.0),
+         P("/",44,1.0), S("SHIFT",60,2.25)],
+
+        [S("CTRL",59,1.5), S("FN",63,1.5), S("",49,5.5), S("ALT",58,1.5), S("CTRL",62,1.5),
+         S("←",123,1.0), S("↓",125,1.0), S("→",124,1.0)],
     ]}
 
     private var isoRows: [[KeyDef]] {[
-        // Row 0: same as ANSI
-        [K("ESC",53,1.0), K("`",50,1.0), K("1",18,1.0), K("2",19,1.0), K("3",20,1.0),
-         K("4",21,1.0), K("5",23,1.0), K("6",22,1.0), K("7",26,1.0), K("8",28,1.0),
-         K("9",25,1.0), K("0",29,1.0), K("-",27,1.0), K("=",24,1.0), K("⌫",51,2.0)],
-        // Row 1: QWERTY — no backslash, Enter at end (top of L)
-        [K("⇥",48,1.5), K("Q",12,1.0), K("W",13,1.0), K("E",14,1.0), K("R",15,1.0),
-         K("T",17,1.0), K("Y",16,1.0), K("U",32,1.0), K("I",34,1.0), K("O",31,1.0),
-         K("P",35,1.0), K("[",33,1.0), K("]",30,1.0), K("↩",36,1.75)],
-        // Row 2: ASDF — extra ISO key (code 42, # on UK) before ENTER (bottom of L)
-        [K("⇪",57,1.75), K("A",0,1.0), K("S",1,1.0), K("D",2,1.0), K("F",3,1.0),
-         K("G",5,1.0), K("H",4,1.0), K("J",38,1.0), K("K",40,1.0), K("L",37,1.0),
-         K(";",41,1.0), K("'",39,1.0), K("#",42,1.0)],
-        // Row 3: ZXCV — narrow left shift, ISO key (code 10, § on UK) between shift and Z
-        [K("⇧",56,1.25), K("§",10,1.0), K("Z",6,1.0), K("X",7,1.0), K("C",8,1.0),
-         K("V",9,1.0), K("B",11,1.0), K("N",45,1.0), K("M",46,1.0), K(",",43,1.0),
-         K(".",47,1.0), K("/",44,1.0), K("⇧",60,2.25)],
-        // Row 4: same as ANSI
-        [K("⌃",59,1.5), K("FN",63,1.5), K(" ",49,5.0), K("⌥",58,1.5), K("⌃",62,1.5)],
+        [S("ESC",53,1.0), P("`",50,1.0), P("1",18,1.0), P("2",19,1.0), P("3",20,1.0),
+         P("4",21,1.0), P("5",23,1.0), P("6",22,1.0), P("7",26,1.0), P("8",28,1.0),
+         P("9",25,1.0), P("0",29,1.0), P("-",27,1.0), P("=",24,1.0), S("BACK",51,2.0)],
+
+        [S("TAB",48,1.5), P("Q",12,1.0), P("W",13,1.0), P("E",14,1.0), P("R",15,1.0),
+         P("T",17,1.0), P("Y",16,1.0), P("U",32,1.0), P("I",34,1.0), P("O",31,1.0),
+         P("P",35,1.0), P("[",33,1.0), P("]",30,1.0), S("ENTER",36,1.75)],
+
+        [S("CAPS",57,1.75), P("A",0,1.0), P("S",1,1.0), P("D",2,1.0), P("F",3,1.0),
+         P("G",5,1.0), P("H",4,1.0), P("J",38,1.0), P("K",40,1.0), P("L",37,1.0),
+         P(";",41,1.0), P("'",39,1.0), P("#",42,1.0)],
+
+        [S("SHIFT",56,1.25), P("§",10,1.0), P("Z",6,1.0), P("X",7,1.0), P("C",8,1.0),
+         P("V",9,1.0), P("B",11,1.0), P("N",45,1.0), P("M",46,1.0), P(",",43,1.0),
+         P(".",47,1.0), P("/",44,1.0), S("SHIFT",60,2.25)],
+
+        [S("CTRL",59,1.5), S("FN",63,1.5), S("",49,5.5), S("ALT",58,1.5), S("CTRL",62,1.5),
+         S("←",123,1.0), S("↓",125,1.0), S("→",124,1.0)],
     ]}
 
-    // Convenience constructor — reads translated label for printable keys
-    private func K(_ fallback: String, _ code: UInt16, _ width: Double) -> KeyDef {
-        KeyDef(label: fallback, code: code, widthMultiplier: width)
+    // Printable key — label and shifted label come from UCKeyTranslate
+    private func P(_ fallback: String, _ code: UInt16, _ width: Double) -> KeyDef {
+        KeyDef(label: fallback, code: code, widthMultiplier: width, isSpecial: false)
+    }
+    // Special/modifier key — label is always fixed text
+    private func S(_ label: String, _ code: UInt16, _ width: Double) -> KeyDef {
+        KeyDef(label: label, code: code, widthMultiplier: width, isSpecial: true)
     }
 
     // MARK: - Row renderer
 
-    private func keyRow(_ keys: [KeyDef], totalWidth: CGFloat) -> some View {
+    private func rowView(_ keys: [KeyDef], totalWidth: CGFloat) -> some View {
         let totalUnits = keys.reduce(0.0) { $0 + $1.widthMultiplier }
-        let gaps       = Double(keys.count - 1) * 3.0
-        let usable     = Double(totalWidth - 8)
-        let unit       = (usable - gaps) / totalUnits
+        let gaps   = Double(keys.count - 1) * 3.0
+        let usable = Double(totalWidth - 8)
+        let unit   = (usable - gaps) / totalUnits
 
         return HStack(spacing: 3) {
             ForEach(0..<keys.count, id: \.self) { i in
                 let key = keys[i]
+                let mainLabel   = key.isSpecial ? key.label : (detector.normal[key.code]  ?? key.label)
+                let shiftLabel  = key.isSpecial ? ""        : (detector.shifted[key.code] ?? "")
                 KeyCapView(
-                    label:     label(key),
-                    isPressed: pressedKeyCodes.contains(key.code),
+                    main:      mainLabel,
+                    shift:     shiftLabel,
+                    isPressed: pressed.contains(key.code),
                     theme:     theme
                 )
-                .frame(width: CGFloat(unit * key.widthMultiplier), height: 26)
+                .frame(width: CGFloat(unit * key.widthMultiplier), height: 34)
             }
         }
     }
 
-    // MARK: - Key event monitoring
+    // MARK: - Key events
 
     private func startMonitoring() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
-            if event.type == .keyDown { self.pressedKeyCodes.insert(event.keyCode) }
-            else                      { self.pressedKeyCodes.remove(event.keyCode) }
+            if event.type == .keyDown { self.pressed.insert(event.keyCode) }
+            else                      { self.pressed.remove(event.keyCode) }
             return event
         }
     }
-
     private func stopMonitoring() {
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
     }
@@ -229,22 +211,34 @@ struct KeyboardView: View {
 // MARK: - Key cap
 
 private struct KeyCapView: View {
-    let label: String
+    let main:      String   // primary character (large, bottom-centre)
+    let shift:     String   // shifted character (small, top-left)
     let isPressed: Bool
-    let theme: EdexTheme
+    let theme:     EdexTheme
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 3)
-                .fill(isPressed ? theme.bgActive.opacity(0.3) : theme.bgSecondary.opacity(0.5))
+                .fill(isPressed ? theme.bgActive.opacity(0.35) : theme.bgSecondary.opacity(0.55))
             RoundedRectangle(cornerRadius: 3)
-                .stroke(isPressed ? theme.borderColor.opacity(0.8) : theme.borderColor.opacity(0.3),
+                .stroke(isPressed ? theme.borderColor.opacity(0.9) : theme.borderColor.opacity(0.3),
                         lineWidth: isPressed ? 1 : 0.5)
-            Text(label)
-                .font(.edexMono(size: 9))
-                .foregroundStyle(theme.textColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
+
+            // Shifted char — top-left, small
+            if !shift.isEmpty && shift != main {
+                Text(shift)
+                    .font(.edexMono(size: 7))
+                    .foregroundStyle(theme.textColor.opacity(0.5))
+                    .padding(.leading, 3)
+                    .padding(.top, 2)
+            }
+
+            // Main char — centred (slightly lower so shift label has room)
+            Text(main)
+                .font(.edexMono(size: 10))
+                .foregroundStyle(theme.textColor.opacity(isPressed ? 1 : 0.85))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .offset(y: shift.isEmpty || shift == main ? 0 : 3)
         }
     }
 }

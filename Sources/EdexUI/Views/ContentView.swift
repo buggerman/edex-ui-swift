@@ -17,8 +17,11 @@ struct ContentView: View {
     @StateObject private var netMonitor  = NetworkMonitor()
     @StateObject private var fileWatcher = FileWatcher()
 
-    // Width allocated to the keyboard panel when visible
-    private let keyboardWidth: CGFloat = 480
+    // Keyboard takes ~57% of bottom width (matches original eDEX-UI proportions)
+    // Filesystem gets the remaining ~43%
+    private func keyboardWidth(for totalWidth: CGFloat) -> CGFloat {
+        (totalWidth * 0.57).rounded()
+    }
 
     var body: some View {
         let theme = themeManager.current
@@ -55,7 +58,7 @@ struct ContentView: View {
                         Divider().overlay(theme.borderColor.opacity(0.3))
 
                         KeyboardView()
-                            .frame(width: keyboardWidth)
+                            .frame(width: keyboardWidth(for: geo.size.width))
                             .environment(\.edexTheme, themeManager.current)
                     }
                 }

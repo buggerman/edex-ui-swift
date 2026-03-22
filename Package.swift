@@ -18,6 +18,8 @@ let package = Package(
             path: "Sources/EdexUI",
             resources: [
                 .copy("Resources/AppIcon.icns"),
+                .copy("Resources/FiraMonoNerdFont-Regular.otf"),
+                .copy("Resources/FiraMonoNerdFont-Bold.otf"),
             ],
             swiftSettings: []
         ),

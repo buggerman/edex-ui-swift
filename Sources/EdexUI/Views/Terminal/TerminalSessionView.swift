@@ -60,7 +60,9 @@ struct TerminalSessionView: NSViewRepresentable {
     // MARK: - Theme
 
     private func applyColors(_ theme: EdexTheme, to view: LocalProcessTerminalView) {
-        let font = NSFont(name: theme.termFontFamily, size: 13)
+        // Prefer bundled Nerd Font so Powerline/icon glyphs render in the terminal
+        let font = NSFont(name: "FiraMonoNerdFont-Regular", size: 13)
+                ?? NSFont(name: theme.termFontFamily, size: 13)
                 ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         view.font = font
         if let bg = NSColor(hexString: theme.termBackground) { view.nativeBackgroundColor = bg }
