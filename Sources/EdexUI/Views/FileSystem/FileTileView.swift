@@ -28,8 +28,7 @@ struct FileTileView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .augmentedPanel(theme, clipSize: 4, corners: [.topRight, .bottomLeft], lineWidth: 0.5)
-        .background(theme.bgSecondary.opacity(0.3))
+        .background(theme.bgSecondary.opacity(0.25))
     }
 
     @ViewBuilder

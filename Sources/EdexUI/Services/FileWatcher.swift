@@ -83,7 +83,7 @@ final class FileWatcher: ObservableObject {
 
     private func startCWDPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { [weak self] in await self?.pollCWD() }
         }
         // First poll immediately

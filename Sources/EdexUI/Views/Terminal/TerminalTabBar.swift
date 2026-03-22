@@ -81,7 +81,6 @@ private struct TabCell: View {
                         .foregroundStyle(theme.textColor.opacity(isActive ? 1 : 0.55))
                         .lineLimit(1)
                         .padding(.horizontal, 8)
-                        .padding(.trailing, 14) // leave room for close button
                 }
             }
         }
@@ -89,19 +88,8 @@ private struct TabCell: View {
         .frame(width: isActive ? 110 : 90, height: 22)
         .scaleEffect(isActive ? 1.0 : 0.93)
         .animation(.easeInOut(duration: 0.12), value: isActive)
-        // Double-click to rename
+        // Double-click to rename — ⌘W closes via keyboard shortcut
         .simultaneousGesture(TapGesture(count: 2).onEnded { tab.isRenaming = true })
-        // Close button overlaid top-right — separate from the selection Button
-        .overlay(alignment: .trailing) {
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(theme.textColor.opacity(isActive ? 0.6 : 0.3))
-                    .frame(width: 14, height: 14)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 4)
-        }
     }
 
     private func commitRename() {
