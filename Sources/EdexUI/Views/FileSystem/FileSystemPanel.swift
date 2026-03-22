@@ -11,8 +11,8 @@ struct FileSystemPanel: View {
             EdexBanner(title: "FILESYSTEM", name: fileWatcher.currentPath)
 
             GeometryReader { geo in
-                let screenHeight = NSScreen.main?.frame.height ?? geo.size.height / 0.38
-                let tileSize = (screenHeight * 0.085).rounded()
+                // Panel is 30vh; tile is ~65% of panel height so one row fits comfortably
+                let tileSize = (geo.size.height * 0.65).rounded()
                 let cols = max(1, Int(geo.size.width / (tileSize + 2)))
 
                 ScrollView([.horizontal, .vertical], showsIndicators: false) {

@@ -1,8 +1,8 @@
 import SwiftUI
 
 // Root layout — mirrors App.tsx + proportions from index.css / App.tsx:
-//   Top row:  System (16vw) | Terminal (68vw) | Network (16vw)  — 62vh tall
-//   Bottom:   FileSystem | optional keyboard (side by side)      — 38vh tall
+//   Top row:  System (16vw) | Terminal (68vw) | Network (16vw)  — 70vh tall
+//   Bottom:   FileSystem | optional keyboard (side by side)      — 30vh tall
 //
 // When the keyboard is visible it sits to the right of the filesystem panel,
 // taking a fixed width so the file grid shrinks horizontally rather than
@@ -43,7 +43,7 @@ struct ContentView: View {
                         .augmentedPanel(theme, clipSize: 10,
                                         corners: [.bottomLeft], lineWidth: 1)
                 }
-                .frame(height: geo.size.height * 0.62)
+                .frame(height: geo.size.height * 0.70)
 
                 Divider().overlay(theme.borderColor.opacity(0.3))
 
@@ -62,7 +62,7 @@ struct ContentView: View {
                             .environment(\.edexTheme, themeManager.current)
                     }
                 }
-                .frame(height: geo.size.height * 0.38)
+                .frame(height: geo.size.height * 0.30)
             }
         }
         .background(themeManager.current.bgMain)
